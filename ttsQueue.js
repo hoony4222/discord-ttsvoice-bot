@@ -1,4 +1,5 @@
-const {spawn} = require("child_process");
+const googleTTS = require("google-tts-api");
+const fetch = require("node-fetch");
 const fs = require("fs");
 const crypto = require("crypto");
 const {createAudioResource} = require("@discordjs/voice");
@@ -6,59 +7,39 @@ const {createAudioResource} = require("@discordjs/voice");
 let queue = [];
 let playing = false;
 
-function getCacheFile(text, voice, rate, pitch){
- const hash = crypto
-  .createHash("md5")
-  .update(text + voice + rate + pitch)
+function getCacheFile(text){
+
+ const hash = crypto.createHash("md5")
+  .update(text)
   .digest("hex");
 
  return `cache/${hash}.mp3`;
 }
 
-function generateTTS(text, voice, rate, pitch, file){
+async function generateTTS(text,lang,file){
 
- return new Promise((resolve, reject)=>{
-
-  const tts = spawn("edge-tts",[
-   "--voice", voice,
-   "--rate", rate,
-   "--pitch", pitch,
-   "--text", text,
-   "--write-media", file
-  ]);
-
-  tts.on("close",()=>resolve());
-
-  tts.on("error",(err)=>{
-   console.error("TTS ERROR:",err);
-   reject(err);
-  });
-
+ const url = googleTTS.getAudioUrl(text,{
+  lang:lang,
+  slow:false
  });
+
+ const res = await fetch(url);
+ const buffer = await res.buffer();
+
+ fs.writeFileSync(file,buffer);
 
 }
 
 async function play(player,item){
 
- const file = getCacheFile(
-  item.text,
-  item.voice,
-  item.rate,
-  item.pitch
- );
-
  if(!fs.existsSync("cache")){
   fs.mkdirSync("cache");
  }
 
+ const file = getCacheFile(item.text);
+
  if(!fs.existsSync(file)){
-  await generateTTS(
-   item.text,
-   item.voice,
-   item.rate,
-   item.pitch,
-   file
-  );
+  await generateTTS(item.text,item.lang,file);
  }
 
  const resource = createAudioResource(file);
@@ -74,11 +55,7 @@ async function process(player){
 
  const item = queue.shift();
 
- try{
-  await play(player,item);
- }catch(err){
-  console.error("Play error:",err);
- }
+ await play(player,item);
 
  player.once("idle",()=>{
   playing=false;
@@ -88,8 +65,10 @@ async function process(player){
 }
 
 function add(player,data){
+
  queue.push(data);
  process(player);
+
 }
 
-module.exports={add};
+module.exports = {add};

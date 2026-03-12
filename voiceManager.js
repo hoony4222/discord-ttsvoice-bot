@@ -1,26 +1,35 @@
 const fs = require("fs");
-const FILE="roleVoices.json";
+
+const FILE = "roleVoices.json";
 
 function load(){
- if(!fs.existsSync(FILE)) return {};
+
+ if(!fs.existsSync(FILE)){
+  fs.writeFileSync(FILE,"{}");
+ }
+
  return JSON.parse(fs.readFileSync(FILE));
+
 }
 
 function save(data){
+
  fs.writeFileSync(FILE,JSON.stringify(data,null,2));
+
 }
 
-function getVoice(member,roles){
+function getVoice(member,data){
+
  for(const role of member.roles.cache.values()){
-  if(roles[role.id]) return roles[role.id];
+
+  if(data[role.id]){
+   return data[role.id];
+  }
 
  }
 
- return{
-  voice:"ko-KR-SunHiNeural",
-  rate:"+0%",
-  pitch:"+0%"
- };
+ return {lang:"ko"};
+
 }
 
-module.exports={load,save,getVoice};
+module.exports = {load,save,getVoice};
