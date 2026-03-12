@@ -1,5 +1,11 @@
-const {Client,GatewayIntentBits} = require("discord.js");
-const {joinVoiceChannel,createAudioPlayer} = require("@discordjs/voice");
+const { Client, GatewayIntentBits } = require("discord.js");
+const {
+  joinVoiceChannel,
+  createAudioPlayer,
+  entersState,
+  VoiceConnectionStatus,
+  AudioPlayerStatus,
+} = require("@discordjs/voice");
 
 const config = require("./config");
 const filter = require("./messageFilter");
@@ -8,91 +14,192 @@ const voiceManager = require("./voiceManager");
 const ttsQueue = require("./ttsQueue");
 
 const client = new Client({
- intents:[
-  GatewayIntentBits.Guilds,
-  GatewayIntentBits.GuildMessages,
-  GatewayIntentBits.MessageContent,
-  GatewayIntentBits.GuildVoiceStates
- ]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildVoiceStates,
+  ],
 });
 
-let connection;
+let connection = null;
 const player = createAudioPlayer();
 
 let abbreviations = abbrManager.load();
 let roleVoices = voiceManager.load();
 
-client.once("clientReady",()=>{
- console.log("TTS Bot Ready");
+client.once("clientReady", () => {
+  console.log(`TTS Bot Ready: ${client.user.tag}`);
 });
 
-client.on("messageCreate",async message=>{
+player.on("error", (error) => {
+  console.error("Audio Player Error:", error);
+});
 
- if(message.author.bot) return;
+player.on(AudioPlayerStatus.Playing, () => {
+  console.log("Audio player is playing.");
+});
 
- if(message.content==="!join"){
-  const channel = message.member.voice.channel;
-  if(!channel) return message.reply("음성채널에 들어가 주세요");
+player.on(AudioPlayerStatus.Idle, () => {
+  console.log("Audio player is idle.");
+});
 
-  connection = joinVoiceChannel({
-   channelId:channel.id,
-   guildId:channel.guild.id,
-   adapterCreator:channel.guild.voiceAdapterCreator
+async function connectToVoice(channel) {
+  const newConnection = joinVoiceChannel({
+    channelId: channel.id,
+    guildId: channel.guild.id,
+    adapterCreator: channel.guild.voiceAdapterCreator,
+    selfDeaf: false,
   });
 
-  connection.subscribe(player);
-  return;
- }
+  newConnection.on("error", (err) => {
+    console.error("Voice Connection Error:", err);
+  });
 
- if(message.content==="!leave"){
-  if(connection) connection.destroy();
-  connection = null;
-  return;
- }
+  try {
+    await entersState(newConnection, VoiceConnectionStatus.Ready, 30000);
+    newConnection.subscribe(player);
+    console.log(`Connected to voice channel: ${channel.name}`);
+    return newConnection;
+  } catch (error) {
+    console.error("Voice connection failed:", error);
+    newConnection.destroy();
+    return null;
+  }
+}
 
- if(message.content.startsWith("!목소리")){
-  const args = message.content.split(" ");
-  const role = message.mentions.roles.first();
+client.on("messageCreate", async (message) => {
+  try {
+    if (message.author.bot) return;
+    if (!message.guild) return;
 
-  if(!role) return;
+    if (message.content === "!join") {
+      const channel = message.member?.voice?.channel;
 
-  roleVoices[role.id] = {
-   lang: args[2] || "ko"
-  };
+      if (!channel) {
+        await message.reply("먼저 음성채널에 들어가 주세요.");
+        return;
+      }
 
-  voiceManager.save(roleVoices);
-  message.reply("목소리 설정 완료");
-  return;
- }
+      if (connection) {
+        try {
+          connection.destroy();
+        } catch (e) {
+          console.error("Old connection destroy error:", e);
+        }
+        connection = null;
+      }
 
- if(message.content.startsWith("!줄임말")){
-  const args = message.content.split(" ");
-  const key = args[1];
-  const value = args.slice(2).join(" ");
+      connection = await connectToVoice(channel);
 
-  abbreviations[key] = value;
-  abbrManager.save(abbreviations);
+      if (!connection) {
+        await message.reply("음성채널 연결에 실패했습니다.");
+        return;
+      }
 
-  message.reply("줄임말 등록");
-  return;
- }
+      await message.reply(`음성채널 **${channel.name}**에 연결했습니다.`);
+      return;
+    }
 
- if(!connection) return;
+    if (message.content === "!leave") {
+      if (connection) {
+        try {
+          connection.destroy();
+        } catch (e) {
+          console.error("Connection destroy error:", e);
+        }
+        connection = null;
+      }
 
- let text = message.content;
+      await message.reply("음성채널에서 나갔습니다.");
+      return;
+    }
 
- text = filter(text);
- text = abbrManager.apply(text,abbreviations);
+    if (message.content.startsWith("!목소리")) {
+      const args = message.content.split(" ");
+      const role = message.mentions.roles.first();
 
- if(text.length > config.MAX_MESSAGE_LENGTH) return;
+      if (!role) {
+        await message.reply("사용법: `!목소리 @역할 언어코드`");
+        return;
+      }
 
- const voice = voiceManager.getVoice(message.member,roleVoices);
+      roleVoices[role.id] = {
+        lang: args[2] || "ko",
+      };
 
- ttsQueue.add(player,{
-  text,
-  lang: voice.lang
- });
+      voiceManager.save(roleVoices);
+      await message.reply(`${role.name} 역할의 목소리를 설정했습니다.`);
+      return;
+    }
 
+    if (message.content.startsWith("!줄임말")) {
+      const args = message.content.split(" ");
+      const key = args[1];
+      const value = args.slice(2).join(" ");
+
+      if (!key || !value) {
+        await message.reply("사용법: `!줄임말 원문 읽을말`");
+        return;
+      }
+
+      abbreviations[key] = value;
+      abbrManager.save(abbreviations);
+
+      await message.reply(`줄임말 등록 완료: ${key} → ${value}`);
+      return;
+    }
+
+    if (!connection) return;
+
+    const status = connection.state.status;
+    if (
+      status === VoiceConnectionStatus.Destroyed ||
+      status === VoiceConnectionStatus.Disconnected
+    ) {
+      console.log("Voice connection is not active.");
+      return;
+    }
+
+    let text = message.content;
+    text = filter(text);
+    text = abbrManager.apply(text, abbreviations);
+
+    if (!text || !text.trim()) return;
+    if (text.length > config.MAX_MESSAGE_LENGTH) return;
+
+    const voice = voiceManager.getVoice(message.member, roleVoices);
+
+    console.log("QUEUE ADD:", {
+      text,
+      lang: voice.lang,
+      user: message.author.tag,
+    });
+
+    ttsQueue.add(player, {
+      text,
+      lang: voice.lang,
+    });
+  } catch (error) {
+    console.error("messageCreate handler error:", error);
+  }
 });
+
+client.on("error", (error) => {
+  console.error("Client Error:", error);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled Rejection:", reason);
+});
+
+process.on("uncaughtException", (error) => {
+  console.error("Uncaught Exception:", error);
+});
+
+if (!config.TOKEN) {
+  console.error("TOKEN이 설정되지 않았습니다.");
+  process.exit(1);
+}
 
 client.login(config.TOKEN);
