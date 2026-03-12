@@ -28,6 +28,10 @@ const player = createAudioPlayer();
 let abbreviations = abbrManager.load();
 let roleVoices = voiceManager.load();
 
+client.ws.on("VOICE_SERVER_UPDATE", (data) => {
+  console.log("VOICE SERVER UPDATE:", data.endpoint);
+});
+
 client.once("clientReady", () => {
   console.log(`TTS Bot Ready: ${client.user.tag}`);
 });
