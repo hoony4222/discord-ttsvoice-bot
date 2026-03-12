@@ -90,5 +90,3 @@ console.log("TYPE:", typeof config.TOKEN);
 client.login(config.TOKEN);
 
 
-client.login(token);
-
