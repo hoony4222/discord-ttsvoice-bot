@@ -1,0 +1,20 @@
+{
+    "name": "ttsvoice-bot",
+    "version": "1.0.0",
+    "description": "채팅 TTS 봇",
+    "main": "ttsvoice.js",
+    "scripts": {
+        "start": "node ttsvoice.js"
+    },
+    "dependencies": {
+        "@discordjs/voice": "^0.19.1",
+        "discord.js": "^14.25.1",
+        "edge-tts": "^1.0.1",
+        "node-cron": "^4.2.1",
+        "prism-media": "^1.3.5"
+    },
+    "keywords": [],
+    "author": "",
+    "license": "ISC",
+    "type": "commonjs"
+}
