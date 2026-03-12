@@ -84,5 +84,11 @@ client.on("messageCreate",async message=>{
  });
 });
 
+console.log("TOKEN:", config.TOKEN);
+console.log("TYPE:", typeof config.TOKEN);
+
+client.login(config.TOKEN);
+
 
 client.login(token);
+
