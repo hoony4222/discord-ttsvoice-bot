@@ -2,73 +2,134 @@ const googleTTS = require("google-tts-api");
 const fetch = require("node-fetch");
 const fs = require("fs");
 const crypto = require("crypto");
-const {createAudioResource} = require("@discordjs/voice");
+const {
+  createAudioResource,
+  AudioPlayerStatus,
+  entersState,
+} = require("@discordjs/voice");
 
 let queue = [];
 let playing = false;
+let idleHandlerAttached = false;
 
-function getCacheFile(text){
-
- const hash = crypto.createHash("md5")
-  .update(text)
-  .digest("hex");
-
- return `cache/${hash}.mp3`;
+function ensureCacheDir() {
+  if (!fs.existsSync("cache")) {
+    fs.mkdirSync("cache");
+  }
 }
 
-async function generateTTS(text,lang,file){
+function getCacheFile(text, lang) {
+  const hash = crypto
+    .createHash("md5")
+    .update(`${lang}:${text}`)
+    .digest("hex");
 
- const url = googleTTS.getAudioUrl(text,{
-  lang:lang,
-  slow:false
- });
-
- const res = await fetch(url);
- const buffer = await res.buffer();
-
- fs.writeFileSync(file,buffer);
-
+  return `cache/${hash}.mp3`;
 }
 
-async function play(player,item){
+async function generateTTS(text, lang, file) {
+  const url = googleTTS.getAudioUrl(text, {
+    lang,
+    slow: false,
+    host: "https://translate.google.com",
+  });
 
- if(!fs.existsSync("cache")){
-  fs.mkdirSync("cache");
- }
+  const response = await fetch(url);
 
- const file = getCacheFile(item.text);
+  if (!response.ok) {
+    throw new Error(`TTS request failed: ${response.status} ${response.statusText}`);
+  }
 
- if(!fs.existsSync(file)){
-  await generateTTS(item.text,item.lang,file);
- }
+  const buffer = await response.buffer();
 
- const resource = createAudioResource(file);
- player.play(resource);
+  if (!buffer || buffer.length === 0) {
+    throw new Error("TTS response buffer is empty.");
+  }
 
+  fs.writeFileSync(file, buffer);
 }
 
-async function process(player){
+async function prepareFile(text, lang) {
+  ensureCacheDir();
 
- if(playing || queue.length===0) return;
+  const file = getCacheFile(text, lang);
 
- playing = true;
+  if (!fs.existsSync(file)) {
+    console.log("Generating TTS:", { text, lang, file });
+    await generateTTS(text, lang, file);
+  } else {
+    console.log("Using cached TTS:", { text, lang, file });
+  }
 
- const item = queue.shift();
-
- await play(player,item);
-
- player.once("idle",()=>{
-  playing=false;
-  process(player);
- });
-
+  return file;
 }
 
-function add(player,data){
+async function play(player, item) {
+  const file = await prepareFile(item.text, item.lang);
 
- queue.push(data);
- process(player);
+  const resource = createAudioResource(file);
 
+  player.play(resource);
+
+  await entersState(player, AudioPlayerStatus.Playing, 10000);
 }
 
-module.exports = {add};
+async function processQueue(player) {
+  if (playing) return;
+  if (queue.length === 0) return;
+
+  playing = true;
+
+  const item = queue.shift();
+
+  try {
+    console.log("QUEUE PLAY:", item);
+    await play(player, item);
+  } catch (error) {
+    console.error("TTS play error:", error);
+    playing = false;
+    processQueue(player);
+  }
+}
+
+function attachIdleHandler(player) {
+  if (idleHandlerAttached) return;
+  idleHandlerAttached = true;
+
+  player.on(AudioPlayerStatus.Idle, () => {
+    console.log("Audio player is idle.");
+    playing = false;
+    processQueue(player);
+  });
+
+  player.on("error", (error) => {
+    console.error("Audio player internal error:", error);
+    playing = false;
+    processQueue(player);
+  });
+}
+
+function add(player, data) {
+  if (!data || !data.text || !data.lang) return;
+
+  const cleanText = String(data.text).trim();
+
+  if (!cleanText) return;
+
+  attachIdleHandler(player);
+
+  queue.push({
+    text: cleanText,
+    lang: data.lang,
+  });
+
+  console.log("QUEUE ADD:", {
+    text: cleanText,
+    lang: data.lang,
+    size: queue.length,
+  });
+
+  processQueue(player);
+}
+
+module.exports = { add };
