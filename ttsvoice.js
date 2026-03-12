@@ -28,12 +28,16 @@ const player = createAudioPlayer();
 let abbreviations = abbrManager.load();
 let roleVoices = voiceManager.load();
 
-client.ws.on("VOICE_SERVER_UPDATE", (data) => {
-  console.log("VOICE SERVER UPDATE:", data.endpoint);
-});
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 client.once("clientReady", () => {
   console.log(`TTS Bot Ready: ${client.user.tag}`);
+});
+
+client.ws.on("VOICE_SERVER_UPDATE", (data) => {
+  console.log("VOICE SERVER UPDATE:", data.endpoint);
 });
 
 player.on("error", (error) => {
@@ -48,51 +52,61 @@ player.on(AudioPlayerStatus.Idle, () => {
   console.log("Audio player is idle.");
 });
 
-async function connectToVoice(channel, maxRetries = 3) {
+async function destroyConnectionSafe(targetConnection) {
+  if (!targetConnection) return;
+
+  try {
+    targetConnection.destroy();
+  } catch (error) {
+    console.error("Connection destroy error:", error);
+  }
+}
+
+async function connectToVoice(channel, maxRetries = 5) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    const newConnection = joinVoiceChannel({
-      channelId: channel.id,
-      guildId: channel.guild.id,
-      adapterCreator: channel.guild.voiceAdapterCreator,
-      selfDeaf: false,
-      selfMute: false,
-    });
-
-    newConnection.on("error", (err) => {
-      console.error(`Voice Connection Error [try ${attempt}]:`, err);
-    });
-
-    newConnection.on("stateChange", (oldState, newState) => {
-      console.log(
-        `Voice state [try ${attempt}]: ${oldState.status} -> ${newState.status}`
-      );
-    });
-
-    console.log("Trying to connect:", {
-      guild: channel.guild.name,
-      channel: channel.name,
-      joinable: channel.joinable,
-      speakable: channel.speakable,
-      rtcRegion: channel.rtcRegion,
-      attempt,
-    });
+    let newConnection = null;
 
     try {
-      await entersState(newConnection, VoiceConnectionStatus.Ready, 45000);
+      console.log(`Voice connect attempt ${attempt}/${maxRetries}`);
+      console.log("Trying to connect:", {
+        guild: channel.guild.name,
+        channel: channel.name,
+        joinable: channel.joinable,
+        speakable: channel.speakable,
+        rtcRegion: channel.rtcRegion,
+      });
+
+      newConnection = joinVoiceChannel({
+        channelId: channel.id,
+        guildId: channel.guild.id,
+        adapterCreator: channel.guild.voiceAdapterCreator,
+        selfDeaf: false,
+        selfMute: false,
+      });
+
+      newConnection.on("error", (err) => {
+        console.error(`Voice Connection Error [try ${attempt}]:`, err);
+      });
+
+      newConnection.on("stateChange", (oldState, newState) => {
+        console.log(
+          `Voice state [try ${attempt}]: ${oldState.status} -> ${newState.status}`
+        );
+      });
+
+      await entersState(newConnection, VoiceConnectionStatus.Ready, 60000);
+
       newConnection.subscribe(player);
       console.log(`Connected to voice channel: ${channel.name}`);
       return newConnection;
     } catch (error) {
       console.error(`Voice connection failed [try ${attempt}]:`, error);
 
-      try {
-        newConnection.destroy();
-      } catch (destroyError) {
-        console.error("Connection destroy error:", destroyError);
-      }
+      await destroyConnectionSafe(newConnection);
 
       if (attempt < maxRetries) {
-        await new Promise((resolve) => setTimeout(resolve, 3000));
+        console.log("Retrying voice connection...");
+        await wait(5000);
       }
     }
   }
@@ -116,17 +130,25 @@ client.on("messageCreate", async (message) => {
       console.log("VOICE CHANNEL:", channel.name);
       console.log("BOT CAN JOIN:", channel.joinable);
       console.log("BOT CAN SPEAK:", channel.speakable);
+      console.log("CHANNEL RTC REGION:", channel.rtcRegion);
 
-      if (connection) {
-        try {
-          connection.destroy();
-        } catch (e) {
-          console.error("Old connection destroy error:", e);
-        }
-        connection = null;
+      if (!channel.joinable) {
+        await message.reply("해당 음성채널에 연결할 수 없습니다.");
+        return;
       }
 
-      connection = await connectToVoice(channel, 3);
+      if (!channel.speakable) {
+        await message.reply("해당 음성채널에서 말할 권한이 없습니다.");
+        return;
+      }
+
+      if (connection) {
+        await destroyConnectionSafe(connection);
+        connection = null;
+        await wait(1500);
+      }
+
+      connection = await connectToVoice(channel, 5);
 
       if (!connection) {
         await message.reply("음성채널 연결에 실패했습니다. 잠시 후 다시 시도해주세요.");
@@ -139,11 +161,7 @@ client.on("messageCreate", async (message) => {
 
     if (message.content === "!leave") {
       if (connection) {
-        try {
-          connection.destroy();
-        } catch (e) {
-          console.error("Connection destroy error:", e);
-        }
+        await destroyConnectionSafe(connection);
         connection = null;
       }
 
